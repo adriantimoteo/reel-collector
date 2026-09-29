@@ -1,0 +1,13 @@
+from dataclasses import dataclass
+from pathlib import Path
+
+from reelkit.models import ReelMetadata
+
+@dataclass(frozen=True)
+class FetchSettings:
+    temp_dir: Path
+    max_duration: int = ...
+    cookies_file: Path | None = ...
+    cookies_from_browser: str | None = ...
+
+async def fetch(url: str, settings: FetchSettings) -> ReelMetadata: ...

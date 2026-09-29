@@ -6,6 +6,8 @@ from pathlib import Path
 from dotenv import dotenv_values
 
 _VALID_LOG_LEVELS = ("DEBUG", "INFO", "WARNING", "ERROR")
+_DEFAULT_GEMINI_MODEL = "gemini-3.5-flash"
+_DEFAULT_MAX_VIDEO_DURATION_SECONDS = 120
 
 _PATH_ENV_FIELDS = {
     "DB_PATH": ("db_path", Path("./data/gcreelmap.db")),
@@ -32,6 +34,10 @@ class Settings:
     download_temp_dir: Path
     lock_path: Path
     log_level: str
+    gemini_model: str
+    max_video_duration_seconds: int
+    ytdlp_cookies_file: Path | None
+    ytdlp_cookies_from_browser: str | None
     telegram_bot_token: str | None = field(default=None, repr=False)
     gemini_api_key: str | None = field(default=None, repr=False)
     google_places_api_key: str | None = field(default=None, repr=False)
@@ -93,6 +99,34 @@ def load_settings(
             f"LOG_LEVEL must be one of {', '.join(_VALID_LOG_LEVELS)}, got {log_level!r}"
         )
 
+    gemini_model = values.get("GEMINI_MODEL") or _DEFAULT_GEMINI_MODEL
+
+    raw_duration = values.get("MAX_VIDEO_DURATION_SECONDS")
+    max_video_duration_seconds = _DEFAULT_MAX_VIDEO_DURATION_SECONDS
+    if raw_duration is not None:
+        try:
+            max_video_duration_seconds = int(raw_duration)
+        except ValueError:
+            problems.append(f"MAX_VIDEO_DURATION_SECONDS must be an integer, got {raw_duration!r}")
+        else:
+            if max_video_duration_seconds < 10:
+                problems.append("MAX_VIDEO_DURATION_SECONDS must be >= 10")
+
+    # If both cookie sources are configured, the browser wins (matches reel-notes and
+    # reelkit's own _apply_cookies precedence) -- the file is then irrelevant, so its
+    # existence isn't even checked.
+    raw_cookies_from_browser = values.get("YTDLP_COOKIES_FROM_BROWSER")
+    ytdlp_cookies_from_browser = raw_cookies_from_browser or None
+
+    raw_cookies_file = values.get("YTDLP_COOKIES_FILE")
+    ytdlp_cookies_file: Path | None = None
+    if raw_cookies_file and not ytdlp_cookies_from_browser:
+        candidate = Path(raw_cookies_file)
+        if not candidate.exists():
+            problems.append(f"YTDLP_COOKIES_FILE does not exist: {raw_cookies_file}")
+        else:
+            ytdlp_cookies_file = candidate
+
     secrets: dict[str, str | None] = {}
     for env_name, field_name in _SECRET_ENV_FIELDS.items():
         raw = values.get(env_name)
@@ -106,6 +140,10 @@ def load_settings(
         download_temp_dir=parsed_paths["download_temp_dir"],
         lock_path=parsed_paths["lock_path"],
         log_level=log_level,
+        gemini_model=gemini_model,
+        max_video_duration_seconds=max_video_duration_seconds,
+        ytdlp_cookies_file=ytdlp_cookies_file,
+        ytdlp_cookies_from_browser=ytdlp_cookies_from_browser,
         **secrets,
     )
 

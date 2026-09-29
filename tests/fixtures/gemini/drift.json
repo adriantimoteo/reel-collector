@@ -1,0 +1,13 @@
+{
+  "places": [
+    {
+      "name": "Drifted Place",
+      "area": "   ",
+      "city_country": "Somewhere",
+      "category": "nightlife",
+      "blurb": "This blurb is intentionally way way way way way way way way way way way way way way way way way way way way way way way way way way way way way way way way way way way way way way way way way way way way way way way way way way way way way way way way way way way too long, well past the two hundred character validation limit that ExtractedPlace is supposed to enforce on the blurb field so the truncation behaviour can be exercised by this fixture.",
+      "confidence": 1.7,
+      "kind": "book"
+    }
+  ]
+}

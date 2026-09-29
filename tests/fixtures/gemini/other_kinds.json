@@ -1,0 +1,22 @@
+{
+  "places": [
+    {
+      "name": "Ichiran Shibuya",
+      "area": "Shibuya",
+      "city_country": "Tokyo, Japan",
+      "category": "food",
+      "blurb": "Best tonkotsu ramen in the city",
+      "confidence": 0.9,
+      "kind": "place"
+    },
+    {
+      "name": "Atomic Habits",
+      "area": "",
+      "city_country": "",
+      "category": "other",
+      "blurb": "Book recommended for the flight",
+      "confidence": 0.7,
+      "kind": "other"
+    }
+  ]
+}

@@ -1,0 +1,184 @@
+{
+  "places": [
+    {
+      "name": "Place 00",
+      "area": "Some Area",
+      "city_country": "Seoul, South Korea",
+      "category": "food",
+      "blurb": "Recommended spot number 0",
+      "confidence": 0.5,
+      "kind": "place"
+    },
+    {
+      "name": "Place 01",
+      "area": "Some Area",
+      "city_country": "Seoul, South Korea",
+      "category": "food",
+      "blurb": "Recommended spot number 1",
+      "confidence": 0.55,
+      "kind": "place"
+    },
+    {
+      "name": "Place 02",
+      "area": "Some Area",
+      "city_country": "Seoul, South Korea",
+      "category": "food",
+      "blurb": "Recommended spot number 2",
+      "confidence": 0.6,
+      "kind": "place"
+    },
+    {
+      "name": "Place 03",
+      "area": "Some Area",
+      "city_country": "Seoul, South Korea",
+      "category": "food",
+      "blurb": "Recommended spot number 3",
+      "confidence": 0.65,
+      "kind": "place"
+    },
+    {
+      "name": "Place 04",
+      "area": "Some Area",
+      "city_country": "Seoul, South Korea",
+      "category": "food",
+      "blurb": "Recommended spot number 4",
+      "confidence": 0.7,
+      "kind": "place"
+    },
+    {
+      "name": "Place 05",
+      "area": "Some Area",
+      "city_country": "Seoul, South Korea",
+      "category": "food",
+      "blurb": "Recommended spot number 5",
+      "confidence": 0.75,
+      "kind": "place"
+    },
+    {
+      "name": "Place 06",
+      "area": "Some Area",
+      "city_country": "Seoul, South Korea",
+      "category": "food",
+      "blurb": "Recommended spot number 6",
+      "confidence": 0.8,
+      "kind": "place"
+    },
+    {
+      "name": "Place 07",
+      "area": "Some Area",
+      "city_country": "Seoul, South Korea",
+      "category": "food",
+      "blurb": "Recommended spot number 7",
+      "confidence": 0.85,
+      "kind": "place"
+    },
+    {
+      "name": "Place 08",
+      "area": "Some Area",
+      "city_country": "Seoul, South Korea",
+      "category": "food",
+      "blurb": "Recommended spot number 8",
+      "confidence": 0.9,
+      "kind": "place"
+    },
+    {
+      "name": "Place 09",
+      "area": "Some Area",
+      "city_country": "Seoul, South Korea",
+      "category": "food",
+      "blurb": "Recommended spot number 9",
+      "confidence": 0.95,
+      "kind": "place"
+    },
+    {
+      "name": "Place 10",
+      "area": "Some Area",
+      "city_country": "Seoul, South Korea",
+      "category": "food",
+      "blurb": "Recommended spot number 10",
+      "confidence": 0.5,
+      "kind": "place"
+    },
+    {
+      "name": "Place 11",
+      "area": "Some Area",
+      "city_country": "Seoul, South Korea",
+      "category": "food",
+      "blurb": "Recommended spot number 11",
+      "confidence": 0.55,
+      "kind": "place"
+    },
+    {
+      "name": "Place 12",
+      "area": "Some Area",
+      "city_country": "Seoul, South Korea",
+      "category": "food",
+      "blurb": "Recommended spot number 12",
+      "confidence": 0.6,
+      "kind": "place"
+    },
+    {
+      "name": "Place 13",
+      "area": "Some Area",
+      "city_country": "Seoul, South Korea",
+      "category": "food",
+      "blurb": "Recommended spot number 13",
+      "confidence": 0.65,
+      "kind": "place"
+    },
+    {
+      "name": "Place 14",
+      "area": "Some Area",
+      "city_country": "Seoul, South Korea",
+      "category": "food",
+      "blurb": "Recommended spot number 14",
+      "confidence": 0.7,
+      "kind": "place"
+    },
+    {
+      "name": "Place 15",
+      "area": "Some Area",
+      "city_country": "Seoul, South Korea",
+      "category": "food",
+      "blurb": "Recommended spot number 15",
+      "confidence": 0.75,
+      "kind": "place"
+    },
+    {
+      "name": "Place 16",
+      "area": "Some Area",
+      "city_country": "Seoul, South Korea",
+      "category": "food",
+      "blurb": "Recommended spot number 16",
+      "confidence": 0.8,
+      "kind": "place"
+    },
+    {
+      "name": "Place 17",
+      "area": "Some Area",
+      "city_country": "Seoul, South Korea",
+      "category": "food",
+      "blurb": "Recommended spot number 17",
+      "confidence": 0.85,
+      "kind": "place"
+    },
+    {
+      "name": "Place 18",
+      "area": "Some Area",
+      "city_country": "Seoul, South Korea",
+      "category": "food",
+      "blurb": "Recommended spot number 18",
+      "confidence": 0.9,
+      "kind": "place"
+    },
+    {
+      "name": "Place 19",
+      "area": "Some Area",
+      "city_country": "Seoul, South Korea",
+      "category": "food",
+      "blurb": "Recommended spot number 19",
+      "confidence": 0.95,
+      "kind": "place"
+    }
+  ]
+}

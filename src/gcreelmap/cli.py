@@ -1,14 +1,33 @@
 import argparse
+import asyncio
+import contextlib
 import importlib.metadata
 import json
+import sqlite3
 from collections.abc import Sequence
 from pathlib import Path
 from typing import cast
 
-from gcreelmap.config import ConfigError, load_settings, redact, resolve_db_path
+import google.genai as genai
+from reelkit.exceptions import UnsupportedPlatformError
+from reelkit.urls import resolve_canonical_url
+
+from gcreelmap.config import ConfigError, Settings, load_settings, redact, resolve_db_path
+from gcreelmap.domain.clock import SystemClock
+from gcreelmap.domain.failure import ErrorCode, describe
+from gcreelmap.domain.tokens import SecretsTokenSource
+from gcreelmap.pipeline.process import ModelRetiredError, process_reel
 from gcreelmap.run_lock import RunLock, RunLockHeld
+from gcreelmap.store.collections import (
+    Collection,
+    create_collection,
+    get_by_slug,
+    get_collection,
+    list_collections,
+)
 from gcreelmap.store.db import connect
 from gcreelmap.store.migrate import migrate, pending_migrations
+from gcreelmap.store.reels import Reel, claim_next_reel, enqueue_reel, list_reels
 
 _SECRET_NOTES = (
     ("telegram_bot_token", "TELEGRAM_BOT_TOKEN", "P4 (Telegram bot)"),
@@ -142,6 +161,204 @@ def _cmd_doctor(args: argparse.Namespace) -> int:
     return _run_doctor(args.env_file, args.no_migrate)
 
 
+def _reel_counts(conn: sqlite3.Connection, collection_id: int) -> dict[str, int]:
+    rows = conn.execute(
+        "SELECT status, COUNT(*) FROM reels WHERE collection_id = ? GROUP BY status",
+        (collection_id,),
+    ).fetchall()
+    return {row[0]: row[1] for row in rows}
+
+
+def _resolve_trip(conn: sqlite3.Connection, identifier: str) -> Collection | None:
+    if identifier.isdigit():
+        collection = get_collection(conn, int(identifier))
+        if collection is not None:
+            return collection
+    return get_by_slug(conn, identifier)
+
+
+def _connect_and_migrate(settings: Settings) -> sqlite3.Connection:
+    settings.db_path.parent.mkdir(parents=True, exist_ok=True)
+    conn = connect(settings.db_path)
+    migrate(conn, db_path=settings.db_path)
+    return conn
+
+
+def _cmd_trip_new(args: argparse.Namespace) -> int:
+    settings = load_settings(env_file=args.env_file)
+    conn = _connect_and_migrate(settings)
+    try:
+        collection = create_collection(
+            conn,
+            owner_type="user",
+            owner_id=0,
+            name=args.name,
+            now=SystemClock().now(),
+            tokens=SecretsTokenSource(),
+        )
+        print(f"{collection.id}\t{collection.slug}")
+    finally:
+        conn.close()
+    return 0
+
+
+def _cmd_trip_list(args: argparse.Namespace) -> int:
+    settings = load_settings(env_file=args.env_file)
+    conn = _connect_and_migrate(settings)
+    try:
+        collections = list_collections(conn)
+        if not collections:
+            print("No trips yet.")
+            return 0
+        for collection in collections:
+            counts = _reel_counts(conn, collection.id)
+            counts_text = ", ".join(f"{status}={n}" for status, n in sorted(counts.items()))
+            print(f"{collection.id}\t{collection.slug}\t{collection.name}\t{counts_text or 'none'}")
+    finally:
+        conn.close()
+    return 0
+
+
+def _print_reel_outcome(
+    conn: sqlite3.Connection, reel: Reel, status: str, error_code: str | None
+) -> None:
+    if status == "done":
+        rows = conn.execute(
+            "SELECT resolution_status, COUNT(*) FROM item_mentions WHERE reel_id = ? "
+            "GROUP BY resolution_status",
+            (reel.id,),
+        ).fetchall()
+        counts = {row[0]: row[1] for row in rows}
+        places = counts.get("pending", 0)
+        skipped = counts.get("skipped", 0)
+        print(f"done: {places} places ({skipped} skipped as non-places) {reel.canonical_url}")
+        return
+    code = error_code or ErrorCode.INTERNAL.value
+    try:
+        description = describe(ErrorCode(code))
+    except ValueError:
+        description = "an internal error occurred"
+    print(f"{status}: {code} — {description} {reel.canonical_url}")
+
+
+async def _process_queued_reels(
+    conn: sqlite3.Connection, collection: Collection, settings: Settings, client: genai.Client
+) -> None:
+    clock = SystemClock()
+    while True:
+        reel = claim_next_reel(conn, now=clock.now(), collection_id=collection.id)
+        if reel is None:
+            return
+        try:
+            outcome = await process_reel(conn, reel, settings=settings, client=client, clock=clock)
+        except ModelRetiredError:
+            print(
+                f"gemini model retired: update GEMINI_MODEL (currently {settings.gemini_model}) "
+                "— stopping"
+            )
+            return
+        _print_reel_outcome(conn, reel, outcome.status, outcome.error_code)
+
+
+def _cmd_add_reel(args: argparse.Namespace) -> int:
+    settings = load_settings(env_file=args.env_file)
+    conn = _connect_and_migrate(settings)
+    try:
+        collection = _resolve_trip(conn, args.trip)
+        if collection is None:
+            print(f"no such trip: {args.trip}")
+            return 1
+
+        now = SystemClock().now()
+        any_queued = False
+        for url in args.urls:
+            try:
+                canonical_url, platform = asyncio.run(resolve_canonical_url(url))
+            except UnsupportedPlatformError:
+                print(f"unsupported: {url}")
+                continue
+            _reel_id, created = enqueue_reel(
+                conn,
+                collection_id=collection.id,
+                canonical_url=canonical_url,
+                platform=platform,
+                submitted_by=None,
+                source_message_id=None,
+                now=now,
+            )
+            if created:
+                any_queued = True
+            else:
+                print(f"already added: {canonical_url}")
+
+        if args.queue_only or not any_queued:
+            return 0
+
+        try:
+            settings.require("gemini_api_key")
+        except ConfigError as exc:
+            for problem in exc.problems:
+                print(f"error: {problem}")
+            return 1
+
+        client = genai.Client(api_key=settings.gemini_api_key)
+        try:
+            with RunLock(settings.lock_path):
+                asyncio.run(_process_queued_reels(conn, collection, settings, client))
+        except RunLockHeld:
+            print("another run holds the lock; use --queue-only to enqueue without processing")
+            return 1
+    finally:
+        conn.close()
+    return 0
+
+
+def _cmd_show(args: argparse.Namespace) -> int:
+    settings = load_settings(env_file=args.env_file)
+    conn = _connect_and_migrate(settings)
+    try:
+        collection = _resolve_trip(conn, args.trip)
+        if collection is None:
+            print(f"no such trip: {args.trip}")
+            return 1
+
+        print(f"Trip: {collection.name} ({collection.slug})")
+        counts = _reel_counts(conn, collection.id)
+        counts_text = " ".join(
+            f"{status}={counts.get(status, 0)}"
+            for status in ("queued", "processing", "done", "failed")
+        )
+        print(f"Reels: {counts_text}")
+        print()
+
+        for reel in list_reels(conn, collection.id):
+            if reel.status == "failed" and reel.error_code:
+                header = f"[failed: {reel.error_code}]"
+                with contextlib.suppress(ValueError):
+                    header += f" {describe(ErrorCode(reel.error_code))}"
+                print(f"{header} {reel.canonical_url}")
+            else:
+                author_text = f" (by {reel.author})" if reel.author else ""
+                print(f"[{reel.status}] {reel.canonical_url}{author_text}")
+
+            mention_rows = conn.execute(
+                "SELECT raw_name, raw_area, raw_category, confidence, raw_blurb "
+                "FROM item_mentions WHERE reel_id = ? ORDER BY id",
+                (reel.id,),
+            ).fetchall()
+            for name, area, category, confidence, blurb in mention_rows:
+                area_text = area or ""
+                category_text = category or ""
+                blurb_text = blurb or ""
+                print(
+                    f"  - {name} | {area_text} | {category_text} | {confidence:.2f} | {blurb_text}"
+                )
+            print()
+    finally:
+        conn.close()
+    return 0
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="gcreelmap")
     parser.add_argument("--env-file", default=".env", help="Path to a .env file (default: .env)")
@@ -154,6 +371,33 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Report pending migrations without applying them",
     )
     doctor.set_defaults(func=_cmd_doctor)
+
+    trip = subparsers.add_parser("trip", help="Manage trips")
+    trip_subparsers = trip.add_subparsers(dest="trip_command", required=True)
+
+    trip_new = trip_subparsers.add_parser("new", help="Create a new trip")
+    trip_new.add_argument("name", help="Trip name")
+    trip_new.set_defaults(func=_cmd_trip_new)
+
+    trip_list = trip_subparsers.add_parser("list", help="List trips")
+    trip_list.set_defaults(func=_cmd_trip_list)
+
+    add_reel = subparsers.add_parser("add-reel", help="Queue (and process) reel URLs for a trip")
+    add_reel.add_argument("trip", help="Trip id or slug")
+    add_reel.add_argument("urls", nargs="+", help="One or more reel URLs")
+    add_reel.add_argument(
+        "--queue-only", action="store_true", help="Enqueue the URLs without processing them"
+    )
+    add_reel.set_defaults(func=_cmd_add_reel)
+
+    show = subparsers.add_parser("show", help="Show a trip's reels and extracted mentions")
+    show.add_argument("trip", help="Trip id or slug")
+    show.add_argument(
+        "--mentions",
+        action="store_true",
+        help="Show raw per-reel mentions (the only view available before P2)",
+    )
+    show.set_defaults(func=_cmd_show)
 
     return parser
 

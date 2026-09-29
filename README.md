@@ -16,6 +16,24 @@ uv run gcreelmap doctor
 lock, and the `reelkit`/`yt-dlp`/`gallery-dl` dependencies. `[warn]` lines for
 the three API keys are expected until the phases that need them (P1, P2, P4).
 
+## Trying it out (P1: extraction, no bot yet)
+
+Requires a real `GEMINI_API_KEY` in `.env` (and, for Instagram, `YTDLP_COOKIES_FILE`
+or `YTDLP_COOKIES_FROM_BROWSER` pointing at a burner account -- see `.env.example`).
+
+```powershell
+uv run gcreelmap trip new "Tokyo test"
+uv run gcreelmap add-reel <trip-slug> <reel-url> [<reel-url> ...]
+uv run gcreelmap show <trip-slug>
+```
+
+`add-reel` queues each URL, then (unless `--queue-only` is passed) processes
+everything queued for that trip one at a time: fetch -> one Gemini call ->
+stored place mentions. `show` prints the trip's reels and their extracted
+mentions. TikTok photo-post URLs (`tiktok.com/@user/photo/...`) and Instagram
+carousels are currently not reliably downloadable -- see
+`technical-decisions.md` -> Open Items in the planning vault.
+
 ## Developing against reelkit locally
 
 This project depends on [`reelkit`](https://github.com/adriantimoteo/reel-notes)

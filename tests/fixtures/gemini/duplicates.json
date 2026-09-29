@@ -1,0 +1,22 @@
+{
+  "places": [
+    {
+      "name": "Ichiran  Shibuya",
+      "area": "Shibuya",
+      "city_country": "Tokyo, Japan",
+      "category": "food",
+      "blurb": "Ramen chain, solo booths",
+      "confidence": 0.7,
+      "kind": "place"
+    },
+    {
+      "name": "ichiran shibuya",
+      "area": "Shibuya",
+      "city_country": "Tokyo, Japan",
+      "category": "food",
+      "blurb": "Best tonkotsu ramen, highly recommended",
+      "confidence": 0.92,
+      "kind": "place"
+    }
+  ]
+}

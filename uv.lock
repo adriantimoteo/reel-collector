@@ -581,6 +581,8 @@ version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "filelock" },
+    { name = "google-genai" },
+    { name = "pydantic" },
     { name = "python-dotenv" },
     { name = "reelkit", extra = ["telegram"] },
     { name = "tzdata" },
@@ -600,6 +602,8 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "filelock", specifier = ">=3.15" },
+    { name = "google-genai", specifier = ">=1.0" },
+    { name = "pydantic", specifier = ">=2.0" },
     { name = "python-dotenv", specifier = ">=1.0" },
     { name = "reelkit", extras = ["telegram"], git = "https://github.com/adriantimoteo/reel-notes?subdirectory=packages%2Freelkit&rev=dfcf461c95da9aa19c283d3b7465e28aae3a55f3" },
     { name = "tzdata", specifier = ">=2024.1" },
