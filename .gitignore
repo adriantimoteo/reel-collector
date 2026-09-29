@@ -1,0 +1,12 @@
+.venv/
+data/
+.env
+logs/
+site/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+*.bak-*
+.pyright_cache/
+.claude/settings.local.json

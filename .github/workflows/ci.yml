@@ -1,0 +1,59 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  TELEGRAM_BOT_TOKEN: "test-token"
+  GEMINI_API_KEY: "test-token"
+  GOOGLE_PLACES_API_KEY: "test-token"
+  WRANGLER_SEND_METRICS: "false"
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v3
+
+      - name: Install dependencies
+        run: uv sync --locked
+
+      - name: Lint
+        run: uv run ruff check
+
+      - name: Format check
+        run: uv run ruff format --check
+
+      - name: Type check
+        run: uv run pyright
+
+      - name: Test
+        run: uv run pytest -q
+
+      - name: Telemetry blocklist
+        run: uv run python scripts/check_telemetry.py
+
+      - name: Dependency audit (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          uv export --no-hashes --format requirements-txt | uv run pip-audit -r /dev/stdin $(
+            grep -v '^#' scripts/audit-ignore.txt | grep -v '^\s*$' | awk '{print "--ignore-vuln", $1}'
+          )
+
+      - name: Dependency audit (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          uv export --no-hashes --format requirements-txt | Out-File -Encoding utf8 requirements-audit.txt
+          $ignoreArgs = Get-Content scripts/audit-ignore.txt |
+            Where-Object { $_ -notmatch '^\s*#' -and $_.Trim() -ne '' } |
+            ForEach-Object { "--ignore-vuln", ($_ -split '\s+')[0] }
+          uv run pip-audit -r requirements-audit.txt @ignoreArgs

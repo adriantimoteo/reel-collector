@@ -1,0 +1,2 @@
+# pip-audit --ignore-vuln entries. One vulnerability ID per line, with a
+# one-line justification, for known-unfixable advisories only.

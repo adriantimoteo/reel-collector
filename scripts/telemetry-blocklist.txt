@@ -1,0 +1,20 @@
+# Packages that must never appear in this project's dependency tree.
+# GC Reel Map's privacy promise (D11) forbids analytics/telemetry in any
+# form, including inside tooling. Comments and blank lines are ignored.
+sentry-sdk
+posthog
+mixpanel
+analytics-python
+segment-analytics-python
+amplitude-analytics
+rudder-sdk-python
+newrelic
+ddtrace
+datadog
+logfire
+statsig
+launchdarkly-server-sdk
+honeycomb-opentelemetry
+opentelemetry-exporter-otlp
+opentelemetry-exporter-otlp-proto-http
+opentelemetry-exporter-otlp-proto-grpc
