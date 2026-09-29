@@ -45,19 +45,6 @@ uv run ruff format --check
 uv run pyright
 ```
 
-## Publishing this repo to GitHub
+## Repository
 
-This repo was initialised locally and has not been pushed anywhere. When
-you're ready:
-
-```powershell
-gh repo create adriantimoteo/gc-reel-collector --private --source=. --remote=origin
-git push -u origin main
-```
-
-or, without the GitHub CLI:
-
-```powershell
-git remote add origin https://github.com/adriantimoteo/gc-reel-collector.git
-git push -u origin main
-```
+https://github.com/adriantimoteo/reel-collector
