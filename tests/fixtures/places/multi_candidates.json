@@ -1,0 +1,25 @@
+{
+  "places": [
+    {
+      "id": "ChIJ_wrong1",
+      "displayName": { "text": "Random Cafe", "languageCode": "en" },
+      "formattedAddress": "Somewhere else, Tokyo, Japan",
+      "location": { "latitude": 35.0, "longitude": 139.0 },
+      "types": ["cafe"]
+    },
+    {
+      "id": "ChIJN1t_tDeuEmsRUsoyG83frY4",
+      "displayName": { "text": "Ichiran Shibuya", "languageCode": "en" },
+      "formattedAddress": "1-2-3 Jinnan, Shibuya City, Tokyo, Japan",
+      "location": { "latitude": 35.6591, "longitude": 139.7002 },
+      "types": ["restaurant"]
+    },
+    {
+      "id": "ChIJ_wrong2",
+      "displayName": { "text": "Another Place", "languageCode": "en" },
+      "formattedAddress": "Elsewhere, Tokyo, Japan",
+      "location": { "latitude": 35.1, "longitude": 139.1 },
+      "types": ["store"]
+    }
+  ]
+}

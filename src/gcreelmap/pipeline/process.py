@@ -19,6 +19,8 @@ from gcreelmap.domain.clock import Clock
 from gcreelmap.domain.failure import ErrorCode
 from gcreelmap.pipeline.extract import ExtractionResult, extract_places
 from gcreelmap.pipeline.fetch import fetch_reel
+from gcreelmap.pipeline.resolve.base import ResolverError, ResolverRegistry
+from gcreelmap.pipeline.resolve_stage import LookupBudget, resolve_pending_mentions
 from gcreelmap.store.collections import bump_version, get_collection
 from gcreelmap.store.db import transaction
 from gcreelmap.store.mentions import insert_mentions
@@ -37,6 +39,7 @@ class ProcessOutcome:
     status: str  # "done" | "requeued" | "failed"
     error_code: str | None
     places_found: int
+    resolver_error: str | None = None
 
 
 def _map_exception(exc: Exception) -> ErrorCode:
@@ -71,7 +74,17 @@ async def process_reel(
     clock: Clock,
     fetch: Callable[[str, Settings], Awaitable[ReelMetadata]] = fetch_reel,
     extract: Callable[..., Awaitable[ExtractionResult]] = extract_places,
+    registry: ResolverRegistry | None = None,
+    budget: LookupBudget | None = None,
 ) -> ProcessOutcome:
+    # Fresh instances per call unless the caller shares one across a batch --
+    # mutable default arguments would leak state (registrations, run count)
+    # across unrelated calls, since defaults are only evaluated once.
+    if registry is None:
+        registry = ResolverRegistry()
+    if budget is None:
+        budget = LookupBudget(max_per_run=150, max_per_day=300)
+
     collection = get_collection(conn, reel.collection_id)
     if collection is None:
         raise RuntimeError(f"reel {reel.id} references a missing collection {reel.collection_id}")
@@ -101,8 +114,32 @@ async def process_reel(
             insert_mentions(conn, reel.id, result.places, now)
             mark_done(conn, reel.id, author=metadata.author, now=now)
             bump_version(conn, reel.collection_id)
+
+        resolver_error: str | None = None
+        if settings.google_places_api_key is None:
+            logger.info(
+                "skipping place resolution for reel %d: GOOGLE_PLACES_API_KEY is unset", reel.id
+            )
+        else:
+            try:
+                await resolve_pending_mentions(
+                    conn,
+                    collection_id=reel.collection_id,
+                    registry=registry,
+                    budget=budget,
+                    settings=settings,
+                    clock=clock,
+                )
+            except ResolverError as exc:
+                logger.warning("resolver error resolving places for reel %d: %s", reel.id, exc)
+                resolver_error = str(exc)
+
         return ProcessOutcome(
-            reel_id=reel.id, status="done", error_code=None, places_found=len(result.places)
+            reel_id=reel.id,
+            status="done",
+            error_code=None,
+            places_found=len(result.places),
+            resolver_error=resolver_error,
         )
     except asyncio.CancelledError:
         raise

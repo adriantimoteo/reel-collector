@@ -1,0 +1,11 @@
+{
+  "places": [
+    {
+      "id": "ChIJcross1",
+      "displayName": { "text": "一踮 渋谷店", "languageCode": "ja" },
+      "formattedAddress": "Shibuya City, Tokyo, Japan",
+      "location": { "latitude": 35.6591, "longitude": 139.7002 },
+      "types": ["restaurant"]
+    }
+  ]
+}

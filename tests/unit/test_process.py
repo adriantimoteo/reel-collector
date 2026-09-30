@@ -38,6 +38,11 @@ def _settings(tmp_path: Path) -> Settings:
         max_video_duration_seconds=120,
         ytdlp_cookies_file=None,
         ytdlp_cookies_from_browser=None,
+        places_max_lookups_per_run=150,
+        places_max_lookups_per_day=300,
+        geocode_cache_ttl_days=30,
+        geocode_negative_ttl_days=7,
+        places_bias_radius_m=50_000,
         gemini_api_key="test-key",
     )
 

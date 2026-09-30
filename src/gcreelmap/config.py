@@ -15,12 +15,6 @@ _PATH_ENV_FIELDS = {
     "LOCK_PATH": ("lock_path", Path("./data/run.lock")),
 }
 
-_SECRET_ENV_FIELDS = {
-    "TELEGRAM_BOT_TOKEN": "telegram_bot_token",
-    "GEMINI_API_KEY": "gemini_api_key",
-    "GOOGLE_PLACES_API_KEY": "google_places_api_key",
-}
-
 
 class ConfigError(Exception):
     def __init__(self, problems: list[str]) -> None:
@@ -38,6 +32,11 @@ class Settings:
     max_video_duration_seconds: int
     ytdlp_cookies_file: Path | None
     ytdlp_cookies_from_browser: str | None
+    places_max_lookups_per_run: int
+    places_max_lookups_per_day: int
+    geocode_cache_ttl_days: int
+    geocode_negative_ttl_days: int
+    places_bias_radius_m: int
     telegram_bot_token: str | None = field(default=None, repr=False)
     gemini_api_key: str | None = field(default=None, repr=False)
     google_places_api_key: str | None = field(default=None, repr=False)
@@ -57,6 +56,23 @@ def _merged_values(env: Mapping[str, str] | None, env_file: Path | str | None) -
         if path.exists():
             file_values = {k: v for k, v in dotenv_values(path).items() if v is not None}
     return {**file_values, **os.environ}
+
+
+def _parse_positive_int(
+    values: Mapping[str, str], env_name: str, default: int, problems: list[str]
+) -> int:
+    raw = values.get(env_name)
+    if raw is None:
+        return default
+    try:
+        parsed = int(raw)
+    except ValueError:
+        problems.append(f"{env_name} must be an integer, got {raw!r}")
+        return default
+    if parsed < 1:
+        problems.append(f"{env_name} must be a positive integer, got {parsed}")
+        return default
+    return parsed
 
 
 def resolve_db_path(
@@ -127,10 +143,21 @@ def load_settings(
         else:
             ytdlp_cookies_file = candidate
 
-    secrets: dict[str, str | None] = {}
-    for env_name, field_name in _SECRET_ENV_FIELDS.items():
-        raw = values.get(env_name)
-        secrets[field_name] = raw if raw else None
+    places_max_lookups_per_run = _parse_positive_int(
+        values, "PLACES_MAX_LOOKUPS_PER_RUN", 150, problems
+    )
+    places_max_lookups_per_day = _parse_positive_int(
+        values, "PLACES_MAX_LOOKUPS_PER_DAY", 300, problems
+    )
+    geocode_cache_ttl_days = _parse_positive_int(values, "GEOCODE_CACHE_TTL_DAYS", 30, problems)
+    geocode_negative_ttl_days = _parse_positive_int(
+        values, "GEOCODE_NEGATIVE_TTL_DAYS", 7, problems
+    )
+    places_bias_radius_m = _parse_positive_int(values, "PLACES_BIAS_RADIUS_M", 50_000, problems)
+
+    telegram_bot_token = values.get("TELEGRAM_BOT_TOKEN") or None
+    gemini_api_key = values.get("GEMINI_API_KEY") or None
+    google_places_api_key = values.get("GOOGLE_PLACES_API_KEY") or None
 
     if problems:
         raise ConfigError(problems)
@@ -144,7 +171,14 @@ def load_settings(
         max_video_duration_seconds=max_video_duration_seconds,
         ytdlp_cookies_file=ytdlp_cookies_file,
         ytdlp_cookies_from_browser=ytdlp_cookies_from_browser,
-        **secrets,
+        places_max_lookups_per_run=places_max_lookups_per_run,
+        places_max_lookups_per_day=places_max_lookups_per_day,
+        geocode_cache_ttl_days=geocode_cache_ttl_days,
+        geocode_negative_ttl_days=geocode_negative_ttl_days,
+        places_bias_radius_m=places_bias_radius_m,
+        telegram_bot_token=telegram_bot_token,
+        gemini_api_key=gemini_api_key,
+        google_places_api_key=google_places_api_key,
     )
 
 

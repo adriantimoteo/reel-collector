@@ -1,0 +1,7 @@
+{
+  "error": {
+    "code": 403,
+    "message": "The provided API key is invalid.",
+    "status": "PERMISSION_DENIED"
+  }
+}

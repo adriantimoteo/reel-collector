@@ -34,6 +34,35 @@ mentions. TikTok photo-post URLs (`tiktok.com/@user/photo/...`) and Instagram
 carousels are currently not reliably downloadable -- see
 `technical-decisions.md` -> Open Items in the planning vault.
 
+## Trying it out (P2: geocoding and merge)
+
+Requires `GOOGLE_PLACES_API_KEY` in `.env` as well, and the checklist in
+`docs/cost-guardrails.md` completed first (budget alerts and a daily quota
+cap in Google Cloud Console).
+
+```powershell
+uv run gcreelmap show <trip-slug>              # ranked, merged view (default)
+uv run gcreelmap show <trip-slug> --stats      # + today's Gemini/Places usage and cache counts
+uv run gcreelmap rebuild <trip-slug>            # re-run merge without new lookups
+uv run gcreelmap resolve-pending <trip-slug>    # retry mentions still `pending` a lookup
+```
+
+`add-reel`/`show` now geocode and merge automatically once a reel is `done`,
+subject to `PLACES_MAX_LOOKUPS_PER_RUN`/`PLACES_MAX_LOOKUPS_PER_DAY`; mentions
+that hit the ceiling stay `pending` until a later run or `resolve-pending`.
+
+### Cost
+
+The Places API (New) Text Search request this app makes (field mask
+`places.id,places.displayName,places.formattedAddress,places.location,`
+`places.types`) bills under the **Places API Text Search Pro** SKU
+(`4FDA-34B1-A910`), not the free Essentials (IDs Only) tier, because it asks
+for `displayName`. As of implementation time: **$32.00 per 1,000 requests**
+for the first paid tier (5,001–100,000/month), with **5,000 requests/month
+free**. See `docs/cost-guardrails.md` for the full checklist, current
+per-app ceilings, and a reminder to re-verify pricing against Google's
+pricing page before relying on it, since it changes without notice.
+
 ## Developing against reelkit locally
 
 This project depends on [`reelkit`](https://github.com/adriantimoteo/reel-notes)

@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import cast
 
 import google.genai as genai
+import httpx
 from reelkit.exceptions import UnsupportedPlatformError
 from reelkit.urls import resolve_canonical_url
 
@@ -17,6 +18,9 @@ from gcreelmap.domain.clock import SystemClock
 from gcreelmap.domain.failure import ErrorCode, describe
 from gcreelmap.domain.tokens import SecretsTokenSource
 from gcreelmap.pipeline.process import ModelRetiredError, process_reel
+from gcreelmap.pipeline.resolve.base import ResolverRegistry
+from gcreelmap.pipeline.resolve.google_places import GooglePlacesResolver
+from gcreelmap.pipeline.resolve_stage import LookupBudget, ResolveReport, resolve_pending_mentions
 from gcreelmap.run_lock import RunLock, RunLockHeld
 from gcreelmap.store.collections import (
     Collection,
@@ -26,6 +30,7 @@ from gcreelmap.store.collections import (
     list_collections,
 )
 from gcreelmap.store.db import connect
+from gcreelmap.store.items import rebuild_items
 from gcreelmap.store.migrate import migrate, pending_migrations
 from gcreelmap.store.reels import Reel, claim_next_reel, enqueue_reel, list_reels
 
@@ -154,6 +159,16 @@ def _run_doctor(env_file: str | None, no_migrate: bool) -> int:
         else:
             _line("ok", f"{env_name} set ({redact(getattr(settings, field_name))})")
 
+    _line(
+        "ok",
+        "places ceilings: "
+        f"max_per_run={settings.places_max_lookups_per_run} "
+        f"max_per_day={settings.places_max_lookups_per_day} "
+        f"cache_ttl_days={settings.geocode_cache_ttl_days} "
+        f"negative_ttl_days={settings.geocode_negative_ttl_days} "
+        f"bias_radius_m={settings.places_bias_radius_m}",
+    )
+
     return 0 if ok else 1
 
 
@@ -245,19 +260,35 @@ async def _process_queued_reels(
     conn: sqlite3.Connection, collection: Collection, settings: Settings, client: genai.Client
 ) -> None:
     clock = SystemClock()
-    while True:
-        reel = claim_next_reel(conn, now=clock.now(), collection_id=collection.id)
-        if reel is None:
-            return
-        try:
-            outcome = await process_reel(conn, reel, settings=settings, client=client, clock=clock)
-        except ModelRetiredError:
-            print(
-                f"gemini model retired: update GEMINI_MODEL (currently {settings.gemini_model}) "
-                "— stopping"
-            )
-            return
-        _print_reel_outcome(conn, reel, outcome.status, outcome.error_code)
+    registry = ResolverRegistry()
+    budget = LookupBudget(settings.places_max_lookups_per_run, settings.places_max_lookups_per_day)
+    async with httpx.AsyncClient(timeout=15.0) as http:
+        if settings.google_places_api_key is not None:
+            registry.register("place", GooglePlacesResolver(settings.google_places_api_key, http))
+
+        while True:
+            reel = claim_next_reel(conn, now=clock.now(), collection_id=collection.id)
+            if reel is None:
+                return
+            try:
+                outcome = await process_reel(
+                    conn,
+                    reel,
+                    settings=settings,
+                    client=client,
+                    clock=clock,
+                    registry=registry,
+                    budget=budget,
+                )
+            except ModelRetiredError:
+                print(
+                    "gemini model retired: update GEMINI_MODEL "
+                    f"(currently {settings.gemini_model}) — stopping"
+                )
+                return
+            _print_reel_outcome(conn, reel, outcome.status, outcome.error_code)
+            if outcome.resolver_error:
+                print(f"places resolver error: {outcome.resolver_error}")
 
 
 def _cmd_add_reel(args: argparse.Namespace) -> int:
@@ -313,6 +344,142 @@ def _cmd_add_reel(args: argparse.Namespace) -> int:
     return 0
 
 
+def _print_mentions_view(conn: sqlite3.Connection, collection: Collection) -> None:
+    for reel in list_reels(conn, collection.id):
+        if reel.status == "failed" and reel.error_code:
+            header = f"[failed: {reel.error_code}]"
+            with contextlib.suppress(ValueError):
+                header += f" {describe(ErrorCode(reel.error_code))}"
+            print(f"{header} {reel.canonical_url}")
+        else:
+            author_text = f" (by {reel.author})" if reel.author else ""
+            print(f"[{reel.status}] {reel.canonical_url}{author_text}")
+
+        mention_rows = conn.execute(
+            "SELECT raw_name, raw_area, raw_category, confidence, raw_blurb "
+            "FROM item_mentions WHERE reel_id = ? ORDER BY id",
+            (reel.id,),
+        ).fetchall()
+        for name, area, category, confidence, blurb in mention_rows:
+            area_text = area or ""
+            category_text = category or ""
+            blurb_text = blurb or ""
+            print(f"  - {name} | {area_text} | {category_text} | {confidence:.2f} | {blurb_text}")
+        print()
+
+
+def _mapped_review_pending_counts(
+    conn: sqlite3.Connection, collection_id: int
+) -> tuple[int, int, int]:
+    mapped = conn.execute(
+        "SELECT COUNT(*) FROM items WHERE collection_id = ? AND needs_review = 0", (collection_id,)
+    ).fetchone()[0]
+    review = conn.execute(
+        "SELECT COUNT(*) FROM items WHERE collection_id = ? AND needs_review = 1", (collection_id,)
+    ).fetchone()[0]
+    pending = conn.execute(
+        "SELECT COUNT(*) FROM item_mentions m JOIN reels r ON r.id = m.reel_id "
+        "WHERE r.collection_id = ? AND m.kind = 'place' AND m.resolution_status = 'pending'",
+        (collection_id,),
+    ).fetchone()[0]
+    return mapped, review, pending
+
+
+def _item_primary_source(conn: sqlite3.Connection, item_id: int) -> tuple[str, str | None] | None:
+    row = conn.execute(
+        "SELECT r.canonical_url, m.raw_blurb FROM item_mentions m "
+        "JOIN reels r ON r.id = m.reel_id WHERE m.item_id = ? "
+        "ORDER BY m.confidence DESC, m.id ASC LIMIT 1",
+        (item_id,),
+    ).fetchone()
+    return (row[0], row[1]) if row is not None else None
+
+
+def _print_ranked_view(conn: sqlite3.Connection, collection: Collection) -> None:
+    mapped, review, pending = _mapped_review_pending_counts(conn, collection.id)
+    reel_counts = _reel_counts(conn, collection.id)
+    done = reel_counts.get("done", 0)
+    failed = reel_counts.get("failed", 0)
+    queued = reel_counts.get("queued", 0) + reel_counts.get("processing", 0)
+    print(
+        f"Reels: {done} done, {failed} failed, {queued} queued | "
+        f"Places: {mapped} mapped, {review} need review, {pending} pending lookup"
+    )
+    print()
+
+    ranked = conn.execute(
+        "SELECT id, name, mention_count, category, lat, lng, address, canonical_id "
+        "FROM items WHERE collection_id = ? AND needs_review = 0 "
+        "ORDER BY mention_count DESC, last_mentioned_at DESC, name ASC",
+        (collection.id,),
+    ).fetchall()
+    for rank, (item_id, name, count, category, lat, lng, address, canonical_id) in enumerate(
+        ranked, start=1
+    ):
+        print(f" {rank}. {name}   x{count}  [{category or 'other'}]  {lat:.5f},{lng:.5f}")
+        place_id_text = f"  (place id {canonical_id})" if canonical_id else ""
+        if address or place_id_text:
+            print(f"    {address or ''}{place_id_text}")
+        source = _item_primary_source(conn, item_id)
+        if source is not None:
+            url, blurb = source
+            extra = count - 1
+            suffix = f"  (+{extra} more reel{'s' if extra != 1 else ''})" if extra > 0 else ""
+            blurb_text = f'"{blurb}" — ' if blurb else ""
+            print(f"    {blurb_text}{url}{suffix}")
+
+    review_rows = conn.execute(
+        "SELECT id, name, review_reason FROM items WHERE collection_id = ? AND needs_review = 1 "
+        "ORDER BY mention_count DESC, last_mentioned_at DESC, name ASC",
+        (collection.id,),
+    ).fetchall()
+    if review_rows:
+        print()
+        print(f"Needs review ({len(review_rows)}):")
+        for item_id, name, review_reason in review_rows:
+            area_row = conn.execute(
+                "SELECT raw_area FROM item_mentions WHERE item_id = ? "
+                "ORDER BY confidence DESC, id ASC LIMIT 1",
+                (item_id,),
+            ).fetchone()
+            area_text = f" ({area_row[0]})" if area_row and area_row[0] else ""
+            source = _item_primary_source(conn, item_id)
+            source_text = f'  "{source[1]}" — {source[0]}' if source and source[1] else ""
+            print(f"  - {name}{area_text} [{review_reason}]{source_text}")
+
+    failed_reels = [
+        r for r in list_reels(conn, collection.id) if r.status == "failed" and r.error_code
+    ]
+    if failed_reels:
+        print()
+        print(f"Failed reels ({len(failed_reels)}):")
+        for reel in failed_reels:
+            description = ""
+            with contextlib.suppress(ValueError):
+                if reel.error_code:
+                    description = f" — {describe(ErrorCode(reel.error_code))}"
+            print(f"  - {reel.canonical_url}: {reel.error_code}{description}")
+
+
+def _print_stats(conn: sqlite3.Connection, settings: Settings) -> None:
+    today = SystemClock().now().strftime("%Y-%m-%d")
+    gemini_row = conn.execute(
+        "SELECT value FROM kv WHERE key = ?", (f"gemini_calls:{today}",)
+    ).fetchone()
+    places_row = conn.execute(
+        "SELECT value FROM kv WHERE key = ?", (f"places_lookups:{today}",)
+    ).fetchone()
+    gemini_calls = int(gemini_row[0]) if gemini_row else 0
+    places_lookups = int(places_row[0]) if places_row else 0
+    cache_rows = conn.execute("SELECT COUNT(*) FROM geocode_cache").fetchone()[0]
+    print()
+    print(
+        f"Stats: Gemini calls today={gemini_calls}; "
+        f"Places lookups today={places_lookups}/{settings.places_max_lookups_per_day}; "
+        f"geocode cache rows={cache_rows}"
+    )
+
+
 def _cmd_show(args: argparse.Namespace) -> int:
     settings = load_settings(env_file=args.env_file)
     conn = _connect_and_migrate(settings)
@@ -323,37 +490,75 @@ def _cmd_show(args: argparse.Namespace) -> int:
             return 1
 
         print(f"Trip: {collection.name} ({collection.slug})")
-        counts = _reel_counts(conn, collection.id)
-        counts_text = " ".join(
-            f"{status}={counts.get(status, 0)}"
-            for status in ("queued", "processing", "done", "failed")
-        )
-        print(f"Reels: {counts_text}")
-        print()
-
-        for reel in list_reels(conn, collection.id):
-            if reel.status == "failed" and reel.error_code:
-                header = f"[failed: {reel.error_code}]"
-                with contextlib.suppress(ValueError):
-                    header += f" {describe(ErrorCode(reel.error_code))}"
-                print(f"{header} {reel.canonical_url}")
-            else:
-                author_text = f" (by {reel.author})" if reel.author else ""
-                print(f"[{reel.status}] {reel.canonical_url}{author_text}")
-
-            mention_rows = conn.execute(
-                "SELECT raw_name, raw_area, raw_category, confidence, raw_blurb "
-                "FROM item_mentions WHERE reel_id = ? ORDER BY id",
-                (reel.id,),
-            ).fetchall()
-            for name, area, category, confidence, blurb in mention_rows:
-                area_text = area or ""
-                category_text = category or ""
-                blurb_text = blurb or ""
-                print(
-                    f"  - {name} | {area_text} | {category_text} | {confidence:.2f} | {blurb_text}"
-                )
+        if args.mentions:
             print()
+            _print_mentions_view(conn, collection)
+        else:
+            _print_ranked_view(conn, collection)
+
+        if args.stats:
+            _print_stats(conn, settings)
+    finally:
+        conn.close()
+    return 0
+
+
+def _cmd_rebuild(args: argparse.Namespace) -> int:
+    settings = load_settings(env_file=args.env_file)
+    conn = _connect_and_migrate(settings)
+    try:
+        collection = _resolve_trip(conn, args.trip)
+        if collection is None:
+            print(f"no such trip: {args.trip}")
+            return 1
+        result = rebuild_items(conn, collection.id, now=SystemClock().now())
+        print("changed" if result.changed else "unchanged")
+    finally:
+        conn.close()
+    return 0
+
+
+async def _run_resolve_pending(
+    conn: sqlite3.Connection, collection: Collection, settings: Settings
+) -> ResolveReport:
+    api_key = settings.google_places_api_key
+    if api_key is None:
+        raise RuntimeError("google_places_api_key must be set before calling _run_resolve_pending")
+    registry = ResolverRegistry()
+    budget = LookupBudget(settings.places_max_lookups_per_run, settings.places_max_lookups_per_day)
+    async with httpx.AsyncClient(timeout=15.0) as http:
+        registry.register("place", GooglePlacesResolver(api_key, http))
+        return await resolve_pending_mentions(
+            conn,
+            collection_id=collection.id,
+            registry=registry,
+            budget=budget,
+            settings=settings,
+            clock=SystemClock(),
+        )
+
+
+def _cmd_resolve_pending(args: argparse.Namespace) -> int:
+    settings = load_settings(env_file=args.env_file)
+    try:
+        settings.require("google_places_api_key")
+    except ConfigError as exc:
+        for problem in exc.problems:
+            print(f"error: {problem}")
+        return 1
+
+    conn = _connect_and_migrate(settings)
+    try:
+        collection = _resolve_trip(conn, args.trip)
+        if collection is None:
+            print(f"no such trip: {args.trip}")
+            return 1
+        report = asyncio.run(_run_resolve_pending(conn, collection, settings))
+        print(
+            f"resolved={report.resolved} unresolved={report.unresolved} "
+            f"still_pending={report.still_pending} lookups={report.lookups} "
+            f"budget_exhausted={report.budget_exhausted}"
+        )
     finally:
         conn.close()
     return 0
@@ -390,14 +595,29 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     add_reel.set_defaults(func=_cmd_add_reel)
 
-    show = subparsers.add_parser("show", help="Show a trip's reels and extracted mentions")
+    show = subparsers.add_parser("show", help="Show a trip's ranked places (or raw mentions)")
     show.add_argument("trip", help="Trip id or slug")
     show.add_argument(
         "--mentions",
         action="store_true",
-        help="Show raw per-reel mentions (the only view available before P2)",
+        help="Show the raw per-reel mentions view instead of the ranked view",
+    )
+    show.add_argument(
+        "--stats", action="store_true", help="Also print today's Gemini/Places usage and cache size"
     )
     show.set_defaults(func=_cmd_show)
+
+    rebuild = subparsers.add_parser(
+        "rebuild", help="Rebuild a trip's merged items from its mentions"
+    )
+    rebuild.add_argument("trip", help="Trip id or slug")
+    rebuild.set_defaults(func=_cmd_rebuild)
+
+    resolve_pending = subparsers.add_parser(
+        "resolve-pending", help="Resolve a trip's still-pending place mentions"
+    )
+    resolve_pending.add_argument("trip", help="Trip id or slug")
+    resolve_pending.set_defaults(func=_cmd_resolve_pending)
 
     return parser
 

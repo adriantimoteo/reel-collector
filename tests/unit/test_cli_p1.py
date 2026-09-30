@@ -264,9 +264,8 @@ def test_show_output_matches_expected_block(
     )
     capsys.readouterr()
 
-    main(["--env-file", str(env_file), "show", "1"])
+    main(["--env-file", str(env_file), "show", "1", "--mentions"])
     out = capsys.readouterr().out
     assert "Trip: Tokyo Test (tokyo-test-" in out
-    assert "done=1" in out
     assert "[done] https://www.instagram.com/reel/abc123/ (by traveler_jane)" in out
     assert "Ichiran Shibuya | Shibuya | food | 0.90 | Best ramen" in out
